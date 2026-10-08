@@ -2,19 +2,19 @@ import os
 import asyncio
 import threading
 
-from flask import Flask
+from flask import Flask, request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler
 
 TOKEN = os.environ["BOT_TOKEN"]
+WEBHOOK_URL = os.environ["WEBHOOK_URL"]
 
 app = Flask(__name__)
 
-@app.route("/")
-def home():
-    return "Ringtonlar bot ishlayapti!"
+bot_app = Application.builder().token(TOKEN).build()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def start(update: Update, context):
     text = """🌙 Kun ishorasi
 
 O‘zingni boshqalar bilan solishtirishni to‘xtat.
@@ -25,22 +25,52 @@ Sekin ketayotgan bo‘lsang ham, ortga qaytmayotganing muhim."""
 
     await update.message.reply_text(text)
 
-async def main():
-    bot = Application.builder().token(TOKEN).build()
-    bot.add_handler(CommandHandler("start", start))
 
-    await bot.initialize()
-    await bot.start()
-    await bot.updater.start_polling()
+bot_app.add_handler(CommandHandler("start", start))
 
-    await asyncio.Event().wait()
 
-def run_flask():
+loop = asyncio.new_event_loop()
+
+
+def telegram_worker():
+    asyncio.set_event_loop(loop)
+
+    loop.run_until_complete(bot_app.initialize())
+    loop.run_until_complete(bot_app.start())
+
+    loop.run_until_complete(
+        bot_app.bot.set_webhook(WEBHOOK_URL)
+    )
+
+    loop.run_forever()
+
+
+@app.route("/")
+def home():
+    return "Ringtonlar bot ishlayapti!"
+
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+
+    update = Update.de_json(data, bot_app.bot)
+
+    asyncio.run_coroutine_threadsafe(
+        bot_app.process_update(update),
+        loop
+    )
+
+    return "OK"
+
+
+if __name__ == "__main__":
+    threading.Thread(
+        target=telegram_worker,
+        daemon=True
+    ).start()
+
     app.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 10000))
     )
-
-if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    asyncio.run(main())
